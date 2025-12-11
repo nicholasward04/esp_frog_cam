@@ -1,10 +1,12 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
+#include <WiFiClientSecure.h>
 #include "esp_camera.h"
 #include "secrets.h"
 #include <U8g2lib.h>
 #include <ESP32Servo.h>
+#include <HTTPClient.h>
 
 #define XPOWERS_CHIP_AXP2101
 #include "XPowersLib.h"
@@ -28,6 +30,9 @@
 #define WAVE_TIME_PERIOD_MS 300
 #define NUM_TIMES_TO_WAVE 5
 
+// Cloud Defines
+#define IMAGE_SEND_TO_CLOUD_PERIOD_MS 60000 // Every minute send 1 image
+
 // Global Variables
 
 XPowersPMU PMU;
@@ -47,6 +52,9 @@ uint8_t num_waves = 0;
 
 volatile bool led_enabled = false;
 volatile uint32_t previous_led_toggle_time_ms = 0;
+
+uint32_t previous_cloud_send_time_ms = 0;
+uint32_t image_num = 0;
 
 // Function Prototypes
 void StartCameraServer();
@@ -284,7 +292,7 @@ void HandleLEDState()
     // If LED enabled by user, blink LED
     if (led_enabled)
     {
-        if (previous_led_toggle_time_ms + LED_TOGGLE_PERIOD_MS < millis())
+        if ((previous_led_toggle_time_ms + LED_TOGGLE_PERIOD_MS) < millis())
         {
             previous_led_toggle_time_ms = millis();
             ToggleLED();
@@ -308,11 +316,11 @@ void HandleServoState()
 {
     if (wave_enabled & (num_waves <= NUM_TIMES_TO_WAVE))
     {
-        if (previous_wave_time_ms + WAVE_TIME_PERIOD_MS > millis())
+        if ((previous_wave_time_ms + WAVE_TIME_PERIOD_MS) > millis())
         {
             MoveServo(SERVO_MIN_ANGLE, SERVO_MAX_ANGLE, WAVE_ANGLE_RIGHT);
         }
-        else if (previous_wave_time_ms + (2 * WAVE_TIME_PERIOD_MS) > millis())
+        else if ((previous_wave_time_ms + (2 * WAVE_TIME_PERIOD_MS)) > millis())
         {
             MoveServo(SERVO_MIN_ANGLE, SERVO_MAX_ANGLE, WAVE_ANGLE_LEFT);
         }
@@ -337,6 +345,56 @@ void InitializeLEDAndServo()
     // LED
     pinMode(LED_PIN, OUTPUT);
     DisableLED();
+}
+
+//
+// Cloud Functionality
+//
+
+void UploadToBlobStorage(uint8_t* image_data, size_t len, char* file_name)
+{
+    char url[512];
+    sprintf(url, "%s%s%s", BLOB_SAS_URL, file_name, BLOB_SAS_TOKEN);
+
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    HTTPClient http;
+    http.begin(client, url);
+    http.addHeader("x-ms-blob-type", "BlockBlob");
+    http.addHeader("Content-Type", "image/jpeg");
+
+    http.PUT(image_data, len);
+}
+
+void CaptureAndSendPhoto()
+{
+    camera_fb_t * fb = NULL;
+    esp_err_t res = ESP_OK;
+
+    fb = esp_camera_fb_get();
+    if (!fb) {
+        Serial.println("Camera capture failed");
+        return;
+    }
+
+    char file_name[32];
+    sprintf(file_name, "esp_cam_%d.jpeg", image_num);
+    image_num++;
+
+    UploadToBlobStorage(fb->buf, fb->len, file_name);
+
+    esp_camera_fb_return(fb);
+}
+
+void HandleCloudState()
+{
+    if ((previous_cloud_send_time_ms + IMAGE_SEND_TO_CLOUD_PERIOD_MS) < millis())
+    {
+        CaptureAndSendPhoto();
+
+        previous_cloud_send_time_ms = millis();
+    }
 }
 
 void setup()
@@ -370,4 +428,7 @@ void loop()
 
     // Handle servo state, based off of user input
     HandleServoState();
+
+    // Handle cloud state, send image every 1 minute
+    HandleCloudState();
 }
