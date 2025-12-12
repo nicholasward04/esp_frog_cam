@@ -102,23 +102,18 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   </div>
 
   <script>
-    const view = document.getElementById("video-stream");
-    let isRequesting = false;
+      const view = document.getElementById("video-stream");
 
-    function refreshImage() {
-        if (isRequesting) return; 
-        isRequesting = true;
-        const tempImage = new Image();
-        tempImage.src = "/capture?t=" + new Date().getTime();
-        
-        tempImage.onload = function() {
-            view.src = tempImage.src;
-            isRequesting = false;
-            setTimeout(refreshImage, 20); 
-        };
-    }
-    refreshImage();
-  </script>
+      const current_host = window.location.hostname;
+      const stream_port = 81; 
+      const stream_url = `http://${current_host}:${stream_port}/capture`;
+      view.src = stream_url;
+      view.onerror = function() {
+          setTimeout(() => { 
+              view.src = stream_url + "?t=" + new Date().getTime(); 
+          }, 200);
+      };
+    </script>
 
 </body>
 </html>
